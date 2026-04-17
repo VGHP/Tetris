@@ -4,8 +4,11 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.*
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
@@ -49,11 +52,29 @@ fun Color.shade(percent: Float): Color {
 
 @Composable
 fun AnimatedCircleButton(icon: ImageVector, containerColor: Color, iconColor: Color = Color.White, size: Int = 64, onClick: () -> Unit) {
-    var isPressed by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(targetValue = if (isPressed) 0.75f else 1f, animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow), label = "btn")
-    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(size.dp).scale(scale).clip(CircleShape).background(containerColor).pointerInput(Unit) {
-        detectTapGestures(onPress = { isPressed = true; val released = tryAwaitRelease(); isPressed = false; if (released) onClick() })
-    }) { Icon(icon, contentDescription = null, tint = iconColor, modifier = Modifier.size((size / 2).dp)) }
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.75f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "btnScale"
+    )
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(size.dp)
+            .scale(scale)
+            .clip(CircleShape)
+            .background(containerColor)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            )
+    ) {
+        Icon(icon, contentDescription = null, tint = iconColor, modifier = Modifier.size((size / 2).dp))
+    }
 }
 
 @Composable
@@ -97,6 +118,7 @@ fun DrawScope.drawNyanCatBackground(startX: Float, startY: Float, width: Float, 
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TetrisScreen(viewModel: TetrisViewModel) {
     val state by viewModel.state.collectAsState()
@@ -107,19 +129,14 @@ fun TetrisScreen(viewModel: TetrisViewModel) {
 
     val haptic = LocalHapticFeedback.current
 
-    val infiniteTransition = rememberInfiniteTransition()
+    val infiniteTransition = rememberInfiniteTransition(label = "infinite")
     val timeMillis by infiniteTransition.animateFloat(
         initialValue = 0f, targetValue = 1000f,
-        animationSpec = infiniteRepeatable(animation = tween(1000, easing = LinearEasing), repeatMode = RepeatMode.Restart)
+        animationSpec = infiniteRepeatable(animation = tween(1000, easing = LinearEasing), repeatMode = RepeatMode.Restart),
+        label = "timeMillis"
     )
 
     val isClearing = state.clearingLines.isNotEmpty()
-    val clearAnimProgress by animateFloatAsState(
-        targetValue = if (isClearing) 1f else 0f,
-        animationSpec = tween(durationMillis = 300, easing = LinearOutSlowInEasing),
-        label = "clearAnim"
-    )
-
     val themeColors = ThemeConfig.getColors(state.theme)
 
     LaunchedEffect(state.clearingLines) {
@@ -148,24 +165,29 @@ fun TetrisScreen(viewModel: TetrisViewModel) {
 
             Box(modifier = Modifier.weight(1f).fillMaxWidth()
                 .pointerInput(Unit) {
-                    var dragAccX = 0f; var isDropped = false
-                    detectDragGestures(onDragStart = { dragAccX = 0f; isDropped = false }, onDragEnd = { dragAccX = 0f; isDropped = false }) { change, dragAmount ->
+                    val dragData = floatArrayOf(0f)
+                    val dropData = booleanArrayOf(false)
+                    detectDragGestures(
+                        onDragStart = { dragData[0] = 0f; dropData[0] = false }
+                    ) { change, dragAmount ->
                         change.consume()
                         if (state.status != GameStatus.PLAYING || state.isHardDropping || isClearing) return@detectDragGestures
 
-                        if (dragAmount.y > 30 && dragAmount.y > abs(dragAmount.x) && !isDropped) {
+                        if (dragAmount.y > 30 && dragAmount.y > abs(dragAmount.x) && !dropData[0]) {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             viewModel.hardDrop()
-                            isDropped = true
+                            dropData[0] = true
                         }
-                        else if (!isDropped) {
-                            dragAccX += dragAmount.x
-                            if (dragAccX > 50f) {
+                        else if (!dropData[0]) {
+                            dragData[0] += dragAmount.x
+                            if (dragData[0] > 50f) {
                                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                viewModel.moveRight(); dragAccX = 0f
-                            } else if (dragAccX < -50f) {
+                                viewModel.moveRight()
+                                dragData[0] = 0f
+                            } else if (dragData[0] < -50f) {
                                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                viewModel.moveLeft(); dragAccX = 0f
+                                viewModel.moveLeft()
+                                dragData[0] = 0f
                             }
                         }
                     }
@@ -417,7 +439,20 @@ fun TetrisScreen(viewModel: TetrisViewModel) {
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                     modifier = Modifier.verticalScroll(rememberScrollState())
                 ) {
-                    Column { Text("${Locales.t("volume", state.language)}: ${(state.volume * 100).toInt()}%"); Slider(value = state.volume, onValueChange = { viewModel.setVolume(it) }) }
+                    Column {
+                        Text("${Locales.t("volume", state.language)}: ${(state.volume * 100).toInt()}%")
+                        Slider(
+                            value = state.volume,
+                            onValueChange = { viewModel.setVolume(it) },
+                            thumb = {
+                                Box(
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .background(MaterialTheme.colorScheme.primary, CircleShape)
+                                )
+                            }
+                        )
+                    }
 
                     Column {
                         Text(Locales.t("theme", state.language))
@@ -425,7 +460,7 @@ fun TetrisScreen(viewModel: TetrisViewModel) {
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier.padding(top = 8.dp).horizontalScroll(rememberScrollState())
                         ) {
-                            AppTheme.values().forEach { t ->
+                            AppTheme.entries.forEach { t ->
                                 val title = Locales.t("theme_${t.name.lowercase()}", state.language)
                                 FilterChip(
                                     selected = state.theme == t,
