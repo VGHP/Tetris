@@ -4,6 +4,7 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.*
 import androidx.compose.foundation.horizontalScroll
@@ -19,15 +20,20 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
@@ -36,6 +42,8 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.tetris.model.*
@@ -48,6 +56,25 @@ fun Color.shade(percent: Float): Color {
     val g = (this.green + percent).coerceIn(0f, 1f)
     val b = (this.blue + percent).coerceIn(0f, 1f)
     return Color(r, g, b, this.alpha)
+}
+
+class SpeechBubbleShape(private val cornerRadius: Float = 24f, private val arrowWidth: Float = 30f, private val arrowHeight: Float = 20f) : Shape {
+    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
+        val path = Path().apply {
+            val rectHeight = size.height - arrowHeight
+            addRoundRect(
+                androidx.compose.ui.geometry.RoundRect(
+                    rect = Rect(0f, 0f, size.width, rectHeight),
+                    cornerRadius = CornerRadius(cornerRadius, cornerRadius)
+                )
+            )
+            moveTo(size.width / 2f - arrowWidth / 2f, rectHeight)
+            lineTo(size.width / 2f, size.height) // Острие хвостика
+            lineTo(size.width / 2f + arrowWidth / 2f, rectHeight)
+            close()
+        }
+        return Outline.Generic(path)
+    }
 }
 
 @Composable
@@ -126,6 +153,8 @@ fun TetrisScreen(viewModel: TetrisViewModel) {
 
     var showMenu by remember { mutableStateOf(false) }
     var showAchievements by remember { mutableStateOf(false) }
+
+    var showStartHint by rememberSaveable { mutableStateOf(true) }
 
     val haptic = LocalHapticFeedback.current
 
@@ -386,17 +415,71 @@ fun TetrisScreen(viewModel: TetrisViewModel) {
             }
 
             Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 24.dp)) {
+
                 Row(modifier = Modifier.align(Alignment.CenterStart)) {
                     AnimatedCircleButton(Icons.Rounded.WorkspacePremium, Color.Transparent, Color(0xFFFFD700), 60) { showAchievements = true }
                 }
 
-                Row(modifier = Modifier.align(Alignment.Center), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    when (state.status) {
-                        GameStatus.START_SCREEN -> AnimatedCircleButton(Icons.Filled.PlayArrow, Color(0xFF00C853)) { viewModel.startGame() }
-                        GameStatus.PLAYING -> AnimatedCircleButton(Icons.Filled.Pause, Color(0xFF424242)) { viewModel.pauseGame() }
-                        GameStatus.PAUSED, GameStatus.GAME_OVER -> {
-                            if (state.status == GameStatus.PAUSED) AnimatedCircleButton(Icons.Filled.PlayArrow, Color(0xFF00C853)) { viewModel.resumeGame() }
-                            AnimatedCircleButton(Icons.Filled.Refresh, Color(0xFFD50000)) { viewModel.restartGame() }
+                Box(modifier = Modifier.align(Alignment.Center), contentAlignment = Alignment.BottomCenter) {
+
+                    if (state.status == GameStatus.START_SCREEN) {
+                        val bounceTransition = rememberInfiniteTransition(label = "bounce")
+                        val offsetY by bounceTransition.animateFloat(
+                            initialValue = 0f, targetValue = 12f,
+                            animationSpec = infiniteRepeatable(tween(800, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+                            label = "bounceAnim"
+                        )
+
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .padding(bottom = 75.dp)
+                                .offset(y = (-offsetY).dp)
+                        ) {
+                            AnimatedVisibility(
+                                visible = showStartHint,
+                                enter = fadeIn(tween(500)) + slideInVertically(initialOffsetY = { 20 }),
+                                exit = fadeOut(tween(300)) + slideOutVertically(targetOffsetY = { 20 })
+                            ) {
+                                val isLightTheme = state.theme == AppTheme.RETRO || state.theme == AppTheme.MINIMAL
+                                val bubbleColor = if (isLightTheme) Color.White else Color(
+                                    0x80222222
+                                )
+                                val textColor = if (isLightTheme) Color.Black else Color.White
+                                val borderColor = if (isLightTheme) Color.Black else Color(
+                                    0xFF00C853
+                                )
+
+                                Box(
+                                    modifier = Modifier
+                                        .clip(SpeechBubbleShape())
+                                        .background(bubbleColor)
+                                        .border(2.dp, borderColor, SpeechBubbleShape())
+                                        .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 14.dp)
+                                ) {
+                                    val hintText = if (state.language == AppLanguage.RU) "Нажмите, чтобы начать" else "Tap to start"
+                                    Text(
+                                        text = hintText,
+                                        color = textColor,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        when (state.status) {
+                            GameStatus.START_SCREEN -> AnimatedCircleButton(Icons.Filled.PlayArrow, Color(0xFF00C853)) {
+                                showStartHint = false
+                                viewModel.startGame()
+                            }
+                            GameStatus.PLAYING -> AnimatedCircleButton(Icons.Filled.Pause, Color(0xFF424242)) { viewModel.pauseGame() }
+                            GameStatus.PAUSED, GameStatus.GAME_OVER -> {
+                                if (state.status == GameStatus.PAUSED) AnimatedCircleButton(Icons.Filled.PlayArrow, Color(0xFF00C853)) { viewModel.resumeGame() }
+                                AnimatedCircleButton(Icons.Filled.Refresh, Color(0xFFD50000)) { viewModel.restartGame() }
+                            }
                         }
                     }
                 }
